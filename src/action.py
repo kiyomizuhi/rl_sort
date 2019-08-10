@@ -17,8 +17,7 @@ def generate_dict_action_slot_pair():
         action = 44:   slot pair: (9, 10)
 
     """
-    array = np.arange(NUM_SLOTS)
-    pairs = list(itertools.combinations(array, 2))
+    pairs = list(itertools.combinations(np.arange(NUM_SLOTS), 2))
     dict_action_slotpair = dict((i, p) for i, p in enumerate(pairs))
     dict_slotpair_action = dict((p, i) for i, p in enumerate(pairs))
     return dict_action_slotpair, dict_slotpair_action

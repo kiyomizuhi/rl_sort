@@ -4,7 +4,7 @@ import chainer.functions as F
 import chainer.links as L
 from config import NUM_SLOTS
 
-a = np.exp(np.log(NUM_SLOTS / 2) / 4)
+a = np.exp(np.log((NUM_SLOTS - 1) / 2) / 4)
 layer0 = NUM_SLOTS
 layer1 = int(a * NUM_SLOTS)
 layer2 = int((a ** 2) * NUM_SLOTS)

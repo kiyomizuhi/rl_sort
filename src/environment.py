@@ -37,19 +37,30 @@ class Environment():
         - transition_function: state, action -> prob
         - reward_function: state, state' -> reward
     """
-    def __init__(self, array):
+    def __init__(self, num_slots=NUM_SLOTS):
         self.dict_action_slotpair, self.dict_slotpair_action = generate_dict_action_slotpair()
         self.action_space = list(self.dict_action_slotpair.keys())
-        self._state_init = State(array)
-        self.default_reward = -0.05
+        self._state_init = State(np.zeros(num_slots))
+        self._num_slots = num_slots
+        self.default_reward = -0.1
         self.reset()
 
-    def render(self):
-        print(self.state_prst)
+    @property
+    def num_slots(self):
+        return self._num_slots
 
     @property
     def state_init(self):
         return self._state_init
+
+    @state_init.setter
+    def state_init(self, state):
+        if len(state.array) != self.num_slots:
+            raise Exception(f'the number of slots must be {self.num_slots}')
+        self._state_init = state
+
+    def render(self):
+        print(self.state_prst)
 
     def reset(self):
         self.state_prst = self._state_init.clone()
@@ -67,7 +78,7 @@ class Environment():
         score1, score2 = Environment.eval_state_scores([s1, s2])
         if score2 == NUM_SLOTS - 1:
             done = True
-            reward += 2
+            reward += 10
         else:
             done = False
             if score1 < score2:
@@ -81,6 +92,10 @@ class Environment():
     @staticmethod
     def eval_state_scores(states):
         return [sum(Environment.eval_array(st.array)) for st in states]
+
+    @staticmethod
+    def eval_state_score(state):
+        return sum(Environment.eval_array(state.array))
 
     @staticmethod
     def eval_array(array):

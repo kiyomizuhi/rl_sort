@@ -155,7 +155,6 @@ class DQNAgent(Agent):
 
     def compute_Q(self, model, array):
         features = self.get_features(array)
-        print(features)
         features = chainer.Variable(features.astype(np.float32))
         Q = model.fwd(features)
         return Q

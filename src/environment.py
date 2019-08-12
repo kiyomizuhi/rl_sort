@@ -76,26 +76,26 @@ class Environment():
         # current state and next state
         reward = self.default_reward
         score1, score2 = Environment.eval_state_scores([s1, s2])
+        reward += score2 - score1
         if score2 == NUM_SLOTS - 1:
             done = True
-            reward += 10
         else:
             done = False
-            if score1 < score2:
-                reward += 1
-            elif score1 == score2:
-                reward += 0
-            else:
-                reward += -1
         return reward, done
 
     @staticmethod
     def eval_state_scores(states):
-        return [sum(Environment.eval_array(st.array)) for st in states]
+        return [Environment.eval_state_score(st) for st in states]
 
     @staticmethod
     def eval_state_score(state):
-        return sum(Environment.eval_array(state.array))
+        score = 0
+        for arr in Environment.eval_array(state.array):
+            if arr == 1:
+                score += 1
+            else:
+                break
+        return score
 
     @staticmethod
     def eval_array(array):

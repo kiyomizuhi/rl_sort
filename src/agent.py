@@ -28,7 +28,7 @@ class DQNAgent(Agent):
     def __init__(self, env, epsilon=0.3, learning_rate=0.01, init_model=False):
         self.env = env
         self.memory = Memory()
-        self.gamma = 0.3
+        self.gamma = 0.8
         self._epsilon_init = epsilon
         self._epsilon = epsilon
         self._learning_rate = learning_rate
@@ -57,7 +57,7 @@ class DQNAgent(Agent):
         self.epsilon = self._epsilon_init
 
     def reduce_epsilon(self):
-        self.epsilon = 0.99 * self.epsilon
+        self.epsilon = 0.999 * self.epsilon
 
     @property
     def learning_rate(self):
@@ -65,8 +65,8 @@ class DQNAgent(Agent):
 
     @learning_rate.setter
     def learning_rate(self, learning_rate):
-        if learning_rate < 0.01:
-            learning_rate = 0.01
+        if learning_rate < 0.1:
+            learning_rate = 0.1
         self._learning_rate = learning_rate
 
     def reduce_learning_rate(self):
@@ -153,8 +153,9 @@ class DQNAgent(Agent):
         loss.backward()
         self.optimizer.update()
 
-    def compute_Q(self, model, state):
-        features = self.fit_transform(state)
+    def compute_Q(self, model, array):
+        features = self.get_features(array)
+        print(features)
         features = chainer.Variable(features.astype(np.float32))
         Q = model.fwd(features)
         return Q
@@ -170,23 +171,10 @@ class DQNAgent(Agent):
     def load_model(self, inputfile=DQN_MODEL_FILEPATH):
         chainer.serializers.load_npz(inputfile, self.model)
 
-    def fit_transform(self, state): #TODO: class FeatureEngineering(TranformerMixin)
-        if state.ndim == 1:
-            min_state = state.min()
-            max_state = state.max()
-            if max_state == min_state:
-                delta = 1
-            else:
-                delta = max_state - min_state
-            features = (state - min_state) / delta
-            return features[np.newaxis, :]
-        elif state.ndim == 2:
-            min_state = state.min(axis=1, keepdims=True)
-            max_state = state.max(axis=1, keepdims=True)
-            delta = max_state - min_state
-            delta[delta == 0] = 1.0
-            features = (state - min_state) / delta
-            return features
+    def get_features(self, array):
+        fe = FeatureEngineering(array)
+        fe.generate_features()
+        return fe.features
 
 class Memory(object):
     def __init__(self, capacity=MEMORY_CAPACITY):
@@ -254,6 +242,40 @@ class Memory(object):
             rws[i] = exp[3]
         acs = acs.astype(int)
         return s1s, acs, s2s, rws
+
+class FeatureEngineering(object):
+    def __init__(self, array):
+        if array.ndim == 1:
+            self.array = array[np.newaxis, :]
+        elif array.ndim == 2:
+            self.array = array
+        else:
+            raise Exception('the input array must either be 1 dim or 2 dim!')
+        self.features = np.zeros((BATCH_SIZE, INPUT_LAYER_SIZE))
+        self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
+        self.min_max_scale()
+        self.compare_slots()
+
+    def generate_features(self):
+        self.features[:, 0] = self.array_scaled.mean(axis=1)
+        self.features[:, 1] = self.array_scaled.std(axis=1)
+        self.features[:, 2:(2+NUM_SLOTS)] = self.array_scaled
+        self.features[:, (2+NUM_SLOTS):] = self.compare_array
+
+    def min_max_scale(self):
+        min_array = self.array.min(axis=1, keepdims=True)
+        max_array = self.array.max(axis=1, keepdims=True)
+        delta = max_array - min_array
+        delta[delta == 0] = 1.0
+        self.array_scaled = (self.array - min_array) / delta
+
+    def compare_slots(self):
+        arr = self.array[:, :, np.newaxis] - self.array[:, np.newaxis, :]
+        arr[arr > 0] = 1
+        arr[arr < 0] = -1
+        arr_flat = arr[:, self.slice1, self.slice2]
+        self.compare_array = arr_flat
+
 
 if __name__ == "__main__":
     pass

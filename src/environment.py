@@ -1,7 +1,7 @@
 import enum
 import numpy as np
 import copy
-from config import NUM_SLOTS
+from config import NUM_SLOTS, NUM_SLOT_COMBS
 from action_slotpair import generate_dict_action_slotpair
 
 
@@ -68,44 +68,33 @@ class Environment():
     def step(self, action):
         slot_pair = self.dict_action_slotpair[action]
         state_next = self.state_prst.swap_pair(slot_pair)
-        reward, done = self.reward_func(self.state_prst, state_next)
-        return state_next, reward, done
+        reward, done, scores = self.reward_func(self.state_prst, state_next)
+        return state_next, reward, done, scores
 
     def reward_func(self, s1, s2):
         # in general, reward func depends both on
         # current state and next state
         reward = self.default_reward
-        score1, score2 = Environment.eval_state_scores([s1, s2])
+        score1, score2 = StateEvaluator(s1, s2).eval_state_scores()
         reward += score2 - score1
-        if score2 == NUM_SLOTS - 1:
+        if score2 == NUM_SLOT_COMBS:
             done = True
         else:
             done = False
-        return reward, done
+        return reward, done, (score1, score2)
 
-    @staticmethod
-    def eval_state_scores(states):
-        return [Environment.eval_state_score(st) for st in states]
 
-    @staticmethod
-    def eval_state_score(state):
-        score = 0
-        for arr in Environment.eval_array(state.array):
-            if arr == 1:
-                score += 1
-            else:
-                break
-        return score
+class StateEvaluator(object):
+    def __init__(self, s1, s2):
+        self.arrs = [s1.array, s2.array]
+        self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
 
-    @staticmethod
-    def eval_array(array):
-        return [Environment.eval_order(array[i], array[i + 1]) for i in range(len(array) - 1)]
+    def eval_state_scores(self):
+        return [self.eval_state_score(arr) for arr in self.arrs]
 
-    @staticmethod
-    def eval_order(s1, s2):
-        if s1 < s2:
-            return 1
-        elif s1 == s2:
-            return 0
-        else:
-            return -1
+    def eval_state_score(self, arr):
+        comp = arr[:, np.newaxis] - arr[np.newaxis, :]
+        comp_flat = comp[self.slice1, self.slice2]
+        comp_flat[comp_flat > 0] = 1
+        comp_flat[comp_flat < 0] = -1
+        return comp_flat.sum()

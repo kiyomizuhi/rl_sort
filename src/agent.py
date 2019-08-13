@@ -25,15 +25,14 @@ class DQNAgent(Agent):
     """
     eps
     """
-    def __init__(self, env, epsilon=0.3, learning_rate=0.01, init_model=False):
+    def __init__(self, env, epsilon=0.5, init_model=False):
         self.env = env
         self.memory = Memory()
-        self.gamma = 0.8
+        self.gamma = 0.95
         self._epsilon_init = epsilon
         self._epsilon = epsilon
-        self._learning_rate = learning_rate
         self.actions = env.action_space
-        self.freq_update = 5
+        self.freq_update = 1
         env.render()
 
         if init_model:
@@ -41,7 +40,7 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             self.load_model()
-        self.optimizer = chainer.optimizers.Adam()
+        self.optimizer = chainer.optimizers.Adam(alpha=0.01)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
@@ -58,19 +57,8 @@ class DQNAgent(Agent):
 
     def reduce_epsilon(self):
         self.epsilon = 0.999 * self.epsilon
-
-    @property
-    def learning_rate(self):
-        return self._learning_rate
-
-    @learning_rate.setter
-    def learning_rate(self, learning_rate):
-        if learning_rate < 0.1:
-            learning_rate = 0.1
-        self._learning_rate = learning_rate
-
-    def reduce_learning_rate(self):
-        self.learning_rate = 0.99 * self.learning_rate
+        if (self.epsilon < 0.05) and (self._epsilon_init > 0):
+            self.epsilon = 0.05
 
     def policy(self, state):
         if np.random.rand() < self._epsilon:
@@ -79,23 +67,26 @@ class DQNAgent(Agent):
             Q = self.compute_Q(self.model, state.array)
             return np.argmax(Q.data)
 
-    def log_score(self, step):
-        score = self.env.eval_state_score(self.env.state_prst)
-        self.scores[step] = score
+    def init_log_scores(self, arrays):
+        self.scores1 = np.zeros(len(arrays) * NUM_MAX_STEPS)
+        self.scores2 = np.zeros(len(arrays) * NUM_MAX_STEPS)
+
+    def log_score(self, scores, step):
+        self.scores1[step] = scores[0]
+        self.scores2[step] = scores[1]
 
     def train(self, arrays):
         self.steps = 0
-        self.scores = np.zeros(len(arrays) * NUM_MAX_STEPS)
+        self.init_log_scores(arrays)
         self.memory.init_memory()
         for i, array in enumerate(arrays):
-            if i % 10 == 0:
+            if i % 100 == 0:
                 print(i)
             self.init_epsilon()
             self.env.state_init = State(array)
             self.env.reset()
             #self.env.render()
             self.train_episode()
-            self.reduce_learning_rate()
             self.memory.shuffle_experiences()
         self.save_model()
 
@@ -104,11 +95,11 @@ class DQNAgent(Agent):
         step = 0
         while not done and step < NUM_MAX_STEPS:
             action = self.policy(self.env.state_prst)
-            state_next, reward, done = self.env.step(action)
+            state_next, reward, done, scores = self.env.step(action)
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
-            self.log_score(self.steps + step)
-            if (self.memory.get_num_eperiences() > self.memory.batch_size) and\
+            self.log_score(scores, self.steps + step)
+            if (self.memory.get_num_eperiences() > BATCH_SIZE_BUFFER) and\
                 step % self.freq_update == 0:
                 s1s, acs, s2s, rws = self.memory.priotized_experience_replay()
                 self.update_Q(s1s, acs, s2s, rws)
@@ -119,7 +110,7 @@ class DQNAgent(Agent):
 
     def apply(self, arrays):
         self.steps = 0
-        self.scores = np.zeros(len(arrays) * NUM_MAX_STEPS)
+        self.init_log_scores(arrays)
         self.memory.init_memory()
         for array in arrays:
             self.init_epsilon()
@@ -134,10 +125,10 @@ class DQNAgent(Agent):
         while not done and step < NUM_MAX_STEPS:
             Q_prst = self.compute_Q(self.model, self.env.state_prst.array)
             action = np.argmax(Q_prst.data)
-            state_next, reward, done = self.env.step(action)
+            state_next, reward, done, scores = self.env.step(action)
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
-            self.log_score(self.steps + step)
+            self.log_score(scores, self.steps + step)
             self.env.state_prst = state_next
             step += 1
         self.steps += step
@@ -180,26 +171,23 @@ class Memory(object):
         self.pool = []
         self.capacity = capacity
         self.batch_size = BATCH_SIZE
-        self.batch_size_positive = int(0.4 * self.batch_size)
-        self.batch_size_negative = int(0.4 * self.batch_size)
-        self.batch_size_zero = self.batch_size - self.batch_size_negative - self.batch_size_positive
+        self.batch_size_positive = int(0.5 * self.batch_size)
+        self.batch_size_negative = int(0.5 * self.batch_size)
 
     def init_memory(self):
-        self.pool = dict([('p', []), ('z', []), ('n', [])])
+        self.pool = dict([('p', []), ('n', [])])
 
     def get_num_eperiences(self):
-        len_ = 0
+        num = 0
         for k in self.pool.keys():
-            len_ += len(self.pool[k])
-        return len_
+            num += len(self.pool[k])
+        return num
 
     def memorize(self, exp):
         if exp[3] > 0.0:
             self.append_memory('p', exp)
-        elif exp[3] < -1.0:
-            self.append_memory('n', exp)
         else:
-            self.append_memory('z', exp)
+            self.append_memory('n', exp)
 
     def append_memory(self, key, exp):
         if len(self.pool[key]) < self.capacity:
@@ -214,12 +202,17 @@ class Memory(object):
 
     def random_sample(self):
         exps = []
-        exps.extend(self.random_sample_category('p', self.batch_size_positive))
-        exps.extend(self.random_sample_category('n', self.batch_size_negative))
-        if len(exps) < self.batch_size_negative + self.batch_size_positive:
-            exps.extend(random.sample(self.pool['z'], self.batch_size - len(exps)))
+        num_pool_pos = len(self.pool['p'])
+        num_pool_neg = len(self.pool['n'])
+        if num_pool_pos < self.batch_size_positive:
+            exps.extend(self.pool['p'])
+            exps.extend(self.random_sample_category('n', self.batch_size - num_pool_pos))
+        elif num_pool_neg < self.batch_size_negative:
+            exps.extend(self.pool['n'])
+            exps.extend(self.random_sample_category('p', self.batch_size - num_pool_pos))
         else:
-            exps.extend(random.sample(self.pool['z'], self.batch_size_zero))
+            exps.extend(self.random_sample_category('p', self.batch_size_positive))
+            exps.extend(self.random_sample_category('n', self.batch_size_negative))
         return exps
 
     def random_sample_category(self, cat, batch_size):
@@ -250,16 +243,12 @@ class FeatureEngineering(object):
             self.array = array
         else:
             raise Exception('the input array must either be 1 dim or 2 dim!')
-        self.features = np.zeros((BATCH_SIZE, INPUT_LAYER_SIZE))
+        self.features = np.zeros((array.shape[0], INPUT_LAYER_SIZE))
         self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
         self.min_max_scale()
-        self.compare_slots()
 
     def generate_features(self):
-        self.features[:, 0] = self.array_scaled.mean(axis=1)
-        self.features[:, 1] = self.array_scaled.std(axis=1)
-        self.features[:, 2:(2+NUM_SLOTS)] = self.array_scaled
-        self.features[:, (2+NUM_SLOTS):] = self.compare_array
+        self.features[:, :] = self.array_scaled
 
     def min_max_scale(self):
         min_array = self.array.min(axis=1, keepdims=True)
@@ -267,13 +256,6 @@ class FeatureEngineering(object):
         delta = max_array - min_array
         delta[delta == 0] = 1.0
         self.array_scaled = (self.array - min_array) / delta
-
-    def compare_slots(self):
-        arr = self.array[:, :, np.newaxis] - self.array[:, np.newaxis, :]
-        arr[arr > 0] = 1
-        arr[arr < 0] = -1
-        arr_flat = arr[:, self.slice1, self.slice2]
-        self.compare_array = arr_flat
 
 
 if __name__ == "__main__":

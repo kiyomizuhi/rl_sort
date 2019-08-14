@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from network import QNet
 import chainer
 from environment import State
+import pickle
+from collections import defaultdict
 
 class Agent(ABC):
     """
@@ -28,7 +30,7 @@ class DQNAgent(Agent):
     def __init__(self, env, epsilon=0.5, init_model=False):
         self.env = env
         self.memory = Memory()
-        self.gamma = 0.95
+        self.gamma = 0.9
         self._epsilon_init = epsilon
         self._epsilon = epsilon
         self.actions = env.action_space
@@ -40,7 +42,7 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             self.load_model()
-        self.optimizer = chainer.optimizers.Adam(alpha=0.01)
+        self.optimizer = chainer.optimizers.Adam()
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
@@ -56,7 +58,7 @@ class DQNAgent(Agent):
         self.epsilon = self._epsilon_init
 
     def reduce_epsilon(self):
-        self.epsilon = 0.999 * self.epsilon
+        self.epsilon = 0.99 * self.epsilon
         if (self.epsilon < 0.05) and (self._epsilon_init > 0):
             self.epsilon = 0.05
 
@@ -68,29 +70,29 @@ class DQNAgent(Agent):
             return np.argmax(Q.data)
 
     def init_log_scores(self, arrays):
-        self.scores1 = np.zeros(len(arrays) * NUM_MAX_STEPS)
-        self.scores2 = np.zeros(len(arrays) * NUM_MAX_STEPS)
+        self.scores1 = np.zeros((len(arrays), NUM_MAX_STEPS))
+        self.scores2 = np.zeros((len(arrays), NUM_MAX_STEPS))
 
-    def log_score(self, scores, step):
-        self.scores1[step] = scores[0]
-        self.scores2[step] = scores[1]
+    def log_score(self, scores, ep, step):
+        self.scores1[ep, step] = scores[0]
+        self.scores2[ep, step] = scores[1]
 
     def train(self, arrays):
         self.steps = 0
         self.init_log_scores(arrays)
         self.memory.init_memory()
-        for i, array in enumerate(arrays):
-            if i % 100 == 0:
-                print(i)
+        for ep, array in enumerate(arrays):
+            if ep % 100 == 0:
+                print(ep)
             self.init_epsilon()
             self.env.state_init = State(array)
             self.env.reset()
             #self.env.render()
-            self.train_episode()
+            self.train_episode(ep)
             self.memory.shuffle_experiences()
         self.save_model()
 
-    def train_episode(self):
+    def train_episode(self, ep):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
@@ -98,7 +100,7 @@ class DQNAgent(Agent):
             state_next, reward, done, scores = self.env.step(action)
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
-            self.log_score(scores, self.steps + step)
+            self.log_score(scores, ep, step)
             if (self.memory.get_num_eperiences() > BATCH_SIZE_BUFFER) and\
                 step % self.freq_update == 0:
                 s1s, acs, s2s, rws = self.memory.priotized_experience_replay()
@@ -106,20 +108,19 @@ class DQNAgent(Agent):
                 self.reduce_epsilon()
             self.env.state_prst = state_next
             step += 1
-        self.steps += step
 
     def apply(self, arrays):
         self.steps = 0
         self.init_log_scores(arrays)
         self.memory.init_memory()
-        for array in arrays:
+        for ep, array in enumerate(arrays):
             self.init_epsilon()
             self.env.state_init = State(array)
             self.env.reset()
             #self.env.render()
-            self.apply_episode()
+            self.apply_episode(ep)
 
-    def apply_episode(self):
+    def apply_episode(self, ep):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
@@ -128,10 +129,9 @@ class DQNAgent(Agent):
             state_next, reward, done, scores = self.env.step(action)
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
-            self.log_score(scores, self.steps + step)
+            self.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
-        self.steps += step
 
     def update_Q(self, s1s, acs, s2s, rws):
         Q_prst = self.compute_Q(self.model, s1s)
@@ -157,6 +157,7 @@ class DQNAgent(Agent):
             os.rename(outputfile, file_bk)
         chainer.serializers.save_npz(file_bk, self.model)
         chainer.serializers.save_npz(outputfile, self.model)
+        #pickle.dump(self.scores, f'scores_{now}.pkl')
 
     def load_model(self, inputfile=DQN_MODEL_FILEPATH):
         chainer.serializers.load_npz(inputfile, self.model)
@@ -171,11 +172,11 @@ class Memory(object):
         self.pool = []
         self.capacity = capacity
         self.batch_size = BATCH_SIZE
-        self.batch_size_positive = int(0.5 * self.batch_size)
-        self.batch_size_negative = int(0.5 * self.batch_size)
+        self.num_pools = 4
+        self.batch_size_per_pool = int(BATCH_SIZE / self.num_pools)
 
     def init_memory(self):
-        self.pool = dict([('p', []), ('n', [])])
+        self.pool = defaultdict(list)
 
     def get_num_eperiences(self):
         num = 0
@@ -184,10 +185,8 @@ class Memory(object):
         return num
 
     def memorize(self, exp):
-        if exp[3] > 0.0:
-            self.append_memory('p', exp)
-        else:
-            self.append_memory('n', exp)
+        r = exp[3]
+        self.append_memory(r, exp)
 
     def append_memory(self, key, exp):
         if len(self.pool[key]) < self.capacity:
@@ -202,17 +201,19 @@ class Memory(object):
 
     def random_sample(self):
         exps = []
-        num_pool_pos = len(self.pool['p'])
-        num_pool_neg = len(self.pool['n'])
-        if num_pool_pos < self.batch_size_positive:
-            exps.extend(self.pool['p'])
-            exps.extend(self.random_sample_category('n', self.batch_size - num_pool_pos))
-        elif num_pool_neg < self.batch_size_negative:
-            exps.extend(self.pool['n'])
-            exps.extend(self.random_sample_category('p', self.batch_size - num_pool_pos))
-        else:
-            exps.extend(self.random_sample_category('p', self.batch_size_positive))
-            exps.extend(self.random_sample_category('n', self.batch_size_negative))
+        for r in self.pool.keys():
+            r = int(r)
+            num = len(self.pool[r])
+            if num < self.batch_size / self.num_pools:
+                exps.extend(self.pool[r])
+            else:
+                exps.extend(self.random_sample_category(r, self.batch_size_per_pool))
+        num = len(exps)
+        if num < self.batch_size:
+            num1 = int((self.batch_size - num)/2)
+            exps.extend(self.random_sample_category(1, num1))
+            num2 = self.batch_size - len(exps)
+            exps.extend(self.random_sample_category(1, num2))
         return exps
 
     def random_sample_category(self, cat, batch_size):

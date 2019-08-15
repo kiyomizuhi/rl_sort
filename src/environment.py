@@ -42,7 +42,6 @@ class Environment():
         self.action_space = list(self.dict_action_slotpair.keys())
         self._state_init = State(np.zeros(num_slots))
         self._num_slots = num_slots
-        self.default_reward = -0.1
         self.reset()
 
     @property
@@ -73,15 +72,25 @@ class Environment():
 
     def reward_func(self, s1, s2):
         # in general, reward func depends both on
-        # current state and next state
-        reward = self.default_reward
+        # current state and next state]
         score1, score2 = StateEvaluator(s1, s2).eval_state_scores()
-        reward += score2 - score1
+        reward = score2 - score1
+
+        if reward > 5:
+            reward = 2
+        elif reward > 0:
+            reward = 1
+        elif reward < -5:
+            reward = -2
+        elif reward < 0:
+            reward = -1
+
         if score2 == NUM_SLOT_COMBS:
             done = True
         else:
             done = False
-        return reward, done, (score1, score2)
+
+        return int(reward), done, (score1, score2)
 
 
 class StateEvaluator(object):
@@ -93,7 +102,7 @@ class StateEvaluator(object):
         return [self.eval_state_score(arr) for arr in self.arrs]
 
     def eval_state_score(self, arr):
-        comp = arr[:, np.newaxis] - arr[np.newaxis, :]
+        comp = arr[np.newaxis, :] - arr[:, np.newaxis]
         comp_flat = comp[self.slice1, self.slice2]
         comp_flat[comp_flat > 0] = 1
         comp_flat[comp_flat < 0] = -1

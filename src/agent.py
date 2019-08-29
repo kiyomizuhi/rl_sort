@@ -81,16 +81,15 @@ class DQNAgent(Agent):
         self.steps = 0
         self.log.init_log_scores(arrays)
         self.memory.init_memory()
+        self.eps.init_epsilon()
         for ep, array in enumerate(arrays):
             if ep % 100 == 0:
                 print(ep)
-            self.eps.init_epsilon()
             self.env.state_init = State(array)
             self.env.reset()
-            #self.env.render()
             self.train_episode(ep)
             self.memory.shuffle_experiences()
-        DQNAgent.save_model(DQN_MODEL_FILEPATH)
+        DQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
 
     def train_episode(self, ep):
         done = False
@@ -119,7 +118,6 @@ class DQNAgent(Agent):
             self.eps.init_epsilon()
             self.env.state_init = State(array)
             self.env.reset()
-            #self.env.render()
             self.apply_episode(ep)
 
     def apply_episode(self, ep):
@@ -158,7 +156,6 @@ class DQNAgent(Agent):
             now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             file_bk = f'{outputfile[:-6]}_{now}.model'
             os.rename(outputfile, file_bk)
-        chainer.serializers.save_npz(file_bk, model)
         chainer.serializers.save_npz(outputfile, model)
 
     @classmethod
@@ -200,7 +197,7 @@ class EpsilonManager(object):
     """
     Manage the epsilon
     """
-    def __init__(self, epsilon=0.5):
+    def __init__(self, epsilon=1.0):
         self._epsilon_init = epsilon
         self._epsilon = epsilon
 
@@ -216,7 +213,7 @@ class EpsilonManager(object):
         self.epsilon = self._epsilon_init
 
     def reduce_epsilon(self):
-        self.epsilon = 0.99 * self.epsilon
+        self.epsilon = 0.999 * self.epsilon
         if (self.epsilon < 0.05) and (self._epsilon_init > 0):
             self.epsilon = 0.05
 

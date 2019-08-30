@@ -51,13 +51,12 @@ class DQNAgent(Agent):
     """
     def __init__(self, env, epsilon=0.5, init_model=False):
         self.env = env
-        self.memory = PriotizedMemory()
+        self.memory = ExperienceReplayMemory(rewards=env.rewards)
         self.eps = EpsilonManager(epsilon)
         self.log = Logger()
-        self.gamma = 0.95
+        self.gamma = 0.99
         self.actions = env.action_space
-        self.freq_update = 1
-        self.freq_target_update = 10
+        self.freq_target_update = 20
         env.render()
 
         if init_model:
@@ -88,7 +87,6 @@ class DQNAgent(Agent):
             self.env.state_init = State(array)
             self.env.reset()
             self.train_episode(ep)
-            self.memory.shuffle_experiences()
         DQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
 
     def train_episode(self, ep):
@@ -100,15 +98,15 @@ class DQNAgent(Agent):
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
             self.log.log_score(scores, ep, step)
-            if (self.memory.get_num_eperiences() > BATCH_SIZE_BUFFER) and\
-                step % self.freq_update == 0:
+            if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws = self.memory.experience_replay()
                 self.update_Q(s1s, acs, s2s, rws)
                 self.eps.reduce_epsilon()
-            if step % self.freq_target_update == 0:
-                self.target_model = copy.deepcopy(self.model)
+                if step % self.freq_target_update == 0:
+                    self.target_model = copy.deepcopy(self.model)
             self.env.state_prst = state_next
             step += 1
+        self.steps += step
 
     def apply(self, arrays):
         self.steps = 0
@@ -152,9 +150,9 @@ class DQNAgent(Agent):
 
     @classmethod
     def save_model(cls, model, outputfile=DQN_MODEL_FILEPATH):
+        now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        file_bk = f'{outputfile[:-6]}_{now}.model'
         if os.path.exists(outputfile):
-            now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            file_bk = f'{outputfile[:-6]}_{now}.model'
             os.rename(outputfile, file_bk)
         chainer.serializers.save_npz(outputfile, model)
 
@@ -192,7 +190,6 @@ class DoubleDQNAgent(DQNAgent):
         self.optimizer2.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
 
-
 class EpsilonManager(object):
     """
     Manage the epsilon
@@ -200,6 +197,7 @@ class EpsilonManager(object):
     def __init__(self, epsilon=1.0):
         self._epsilon_init = epsilon
         self._epsilon = epsilon
+        self._epsilon_min = 0.1 if epsilon > 0.1 else epsilon
 
     @property
     def epsilon(self):
@@ -214,33 +212,25 @@ class EpsilonManager(object):
 
     def reduce_epsilon(self):
         self.epsilon = 0.999 * self.epsilon
-        if (self.epsilon < 0.05) and (self._epsilon_init > 0):
-            self.epsilon = 0.05
+        if self.epsilon < self._epsilon_min:
+            self.epsilon = self._epsilon_min
 
-class PriotizedMemory(Memory):
-    def __init__(self, capacity=MEMORY_CAPACITY):
-        self.pool = []
+
+class ExperienceReplayMemory(Memory):
+    def __init__(self, rewards, capacity=MEMORY_CAPACITY):
         self.capacity = capacity
+        self.rewards = rewards
         self.batch_size = BATCH_SIZE
-        self.num_pools = 4
-        self.batch_size_per_pool = int(BATCH_SIZE / self.num_pools)
+        self.batch_size_goal = int(0.2 * BATCH_SIZE)
+        self.batch_size_negative = int(0.4 * BATCH_SIZE)
+        self.batch_size_positive = BATCH_SIZE - self.batch_size_goal - self.batch_size_negative
 
     def init_memory(self):
         self.pool = defaultdict(lambda: deque(maxlen=self.capacity))
 
-    def get_num_eperiences(self):
-        num = 0
-        for k in self.pool.keys():
-            num += len(self.pool[k])
-        return num
-
     def memorize(self, exp):
         r = exp[3]
         self.pool[r].append(exp)
-
-    def shuffle_experiences(self):
-        for k in self.pool.keys():
-            random.shuffle(self.pool[k])
 
     def experience_replay(self):
         s1s = np.zeros((self.batch_size, NUM_SLOTS))
@@ -256,32 +246,49 @@ class PriotizedMemory(Memory):
         acs = acs.astype(int)
         return s1s, acs, s2s, rws
 
-    def random_sample_category(self, cat, batch_size):
-        if len(self.pool[cat]) < batch_size:
-            return self.pool[cat]
-        else:
-            return random.sample(self.pool[cat], batch_size)
-
     def random_sample(self):
         exps = []
-        for r in self.pool.keys():
-            num = len(self.pool[r])
-            if num < self.batch_size / self.num_pools:
-                smps = list(self.pool[r])
-                exps.extend(smps)
-            else:
-                smps = list(random.sample(self.pool[r], self.batch_size_per_pool))
-                exps.extend(smps)
+        r = self.rewards['goal']
+        num = len(self.pool[r])
+        if num == 0:
+            pass
+        elif num < self.batch_size_goal:
+            smps = list(self.pool[r])
+            exps.extend(smps)
+        else:
+            smps = list(random.sample(self.pool[r], self.batch_size_goal))
+            exps.extend(smps)
+
+        r = self.rewards['negative']
+        num = len(self.pool[r])
+        if num < self.batch_size_negative:
+            smps = list(self.pool[r])
+            exps.extend(smps)
+        else:
+            smps = list(random.sample(self.pool[r], self.batch_size_negative))
+            exps.extend(smps)
 
         num = len(exps)
-        if num < self.batch_size:
-            num1 = int((self.batch_size - num)/2)
-            smps = list(random.sample(self.pool[1], num1))
-            exps.extend(smps)
-            num2 = self.batch_size - len(exps)
-            smps = list(random.sample(self.pool[-1], num2))
-            exps.extend(smps)
+        r = self.rewards['positive']
+        smps = list(random.sample(self.pool[r], BATCH_SIZE - num))
+        exps.extend(smps)
         return exps
+
+
+class TDMemoryManager(object):
+    def __init__(self, capacity=MEMORY_CAPACITY):
+        self.capacity = capacity
+        self.batch_size = BATCH_SIZE
+
+    def init_memory(self):
+        self.pool = defaultdict(lambda: deque(maxlen=self.capacity))
+
+
+class PriotizedExperienceReplayMemory(ExperienceReplayMemory):
+    def __init__(self):
+        super(PriotizedExperienceReplayMemory, self).__init__()
+        pass
+
 
 class Logger(object):
     """
@@ -297,6 +304,7 @@ class Logger(object):
     def log_score(self, scores, ep, step):
         self.scores1[ep, step] = scores[0]
         self.scores2[ep, step] = scores[1]
+
 
 class FeatureEngineering(object):
     def __init__(self, array):

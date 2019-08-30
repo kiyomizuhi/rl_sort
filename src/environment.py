@@ -1,7 +1,7 @@
 import enum
 import numpy as np
 import copy
-from config import NUM_SLOTS, NUM_SLOT_COMBS
+from config import NUM_SLOTS, NUM_SLOT_COMBS, NUM_SLOT_COMBS
 from action_slotpair import generate_dict_action_slotpair
 
 
@@ -42,7 +42,12 @@ class Environment():
         self.action_space = list(self.dict_action_slotpair.keys())
         self._state_init = State(np.zeros(num_slots))
         self._num_slots = num_slots
+        self._rewards = {'goal':10, 'positive': 1, 'negative': -1}
         self.reset()
+
+    @property
+    def rewards(self):
+        return self._rewards
 
     @property
     def num_slots(self):
@@ -76,17 +81,14 @@ class Environment():
         score1, score2 = StateEvaluator(s1, s2).eval_state_scores()
         reward = score2 - score1
 
-        if reward > 5:
-            reward = 2
-        elif reward > 0:
+        if reward > 0:
             reward = 1
-        elif reward < -5:
-            reward = -2
         elif reward < 0:
             reward = -1
 
         if score2 == NUM_SLOT_COMBS:
             done = True
+            score2 = 10
         else:
             done = False
 

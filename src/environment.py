@@ -42,7 +42,7 @@ class Environment():
         self.action_space = list(self.dict_action_slotpair.keys())
         self._state_init = State(np.zeros(num_slots))
         self._num_slots = num_slots
-        self._rewards = {'goal':10, 'positive': 1, 'negative': -1}
+        self._rewards = {'goal':10, 'positive': 1, 'negative': -1, 'penalty': -3}
         self.reset()
 
     @property

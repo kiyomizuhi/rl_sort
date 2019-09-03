@@ -47,14 +47,15 @@ class Memory(ABC):
 
 class DQNAgent(Agent):
     """
-    DeepQNetwork Agent with target network
+    Double DeepQNetwork Agent
     """
-    def __init__(self, env, epsilon=0.5, init_model=False):
+    def __init__(self, env, epsilon=1.0, init_model=False):
         self.env = env
         self.memory = ExperienceReplayMemory(rewards=env.rewards)
         self.eps = EpsilonManager(epsilon)
         self.log = Logger()
         self.gamma = 0.99
+        self.gamma2 = self.gamma ** 2
         self.actions = env.action_space
         self.freq_target_update = 20
         env.render()
@@ -86,6 +87,7 @@ class DQNAgent(Agent):
                 print(ep)
             self.env.state_init = State(array)
             self.env.reset()
+            self.memory.init_buffer()
             self.train_episode(ep)
         DQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
 
@@ -97,13 +99,13 @@ class DQNAgent(Agent):
             state_next, reward, done, scores = self.env.step(action)
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
-            self.log.log_score(scores, ep, step)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws = self.memory.experience_replay()
                 self.update_Q(s1s, acs, s2s, rws)
                 self.eps.reduce_epsilon()
                 if step % self.freq_target_update == 0:
                     self.target_model = copy.deepcopy(self.model)
+            self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
         self.steps += step
@@ -161,35 +163,6 @@ class DQNAgent(Agent):
         chainer.serializers.load_npz(inputfile, model)
 
 
-class DoubleDQNAgent(DQNAgent):
-    """
-    Double DQN Agent
-
-        Q(s, a) <= (1 - alpha) * Q(s, a)
-                      + alpha  * (r + gamma * Q'(s', max_{a}(Q)))
-
-    """
-    def __init__(self, env, epsilon=0.5, init_model=False):
-        super(DDQNAgent, self).__init__(env, epsilon, init_model)
-        if init_model:
-            self.model1 = QNet() # Q
-            self.model2 = QNet() # Q'
-
-        else:
-            self.model1 = QNet()
-            DDQNAgent.load_model(self.model1, DQN_MODEL_FILEPATH1)
-            self.model2 = QNet()
-            DDQNAgent.load_model(self.model2, DQN_MODEL_FILEPATH2)
-
-        self.optimizer1 = chainer.optimizers.Adam()
-        self.optimizer1.setup(self.model1)
-        self.optimizer1.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
-
-        self.optimizer2 = chainer.optimizers.Adam()
-        self.optimizer2.setup(self.model2)
-        self.optimizer2.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
-
-
 class EpsilonManager(object):
     """
     Manage the epsilon
@@ -221,12 +194,32 @@ class ExperienceReplayMemory(Memory):
         self.capacity = capacity
         self.rewards = rewards
         self.batch_size = BATCH_SIZE
-        self.batch_size_goal = int(0.2 * BATCH_SIZE)
+        self.batch_size_goal = int(0.17 * BATCH_SIZE)
+        self.batch_size_penalty = int(0.03 * BATCH_SIZE)
         self.batch_size_negative = int(0.4 * BATCH_SIZE)
         self.batch_size_positive = BATCH_SIZE - self.batch_size_goal - self.batch_size_negative
 
     def init_memory(self):
         self.pool = defaultdict(lambda: deque(maxlen=self.capacity))
+
+    def init_buffer(self):
+        self.buffer = deque(maxlen=3)
+
+    def push_to_memory(self, exp):
+        self.buffer.append(exp)
+        if step > 2:
+            if (self.buffer[-1] == self.buffer[-2]):
+                exp[3] = -3
+                exp[4] = True
+                done = True
+                print(ep, step, epsi,self.buffer,
+                      len(self.pool[self.rewards['positive']]),
+                      len(self.pool[self.rewards['negative']]),
+                      len(self.pool[self.rewards['penalty']]),
+                      len(self.pool[self.rewards['goal']]))
+                self.pool[self.rewards['positive']].pop()
+                self.pool[self.rewards['negative']].pop()
+        return tuple(exp), done
 
     def memorize(self, exp):
         r = exp[3]
@@ -257,6 +250,17 @@ class ExperienceReplayMemory(Memory):
             exps.extend(smps)
         else:
             smps = list(random.sample(self.pool[r], self.batch_size_goal))
+            exps.extend(smps)
+
+        r = self.rewards['penalty']
+        num = len(self.pool[r])
+        if num == 0:
+            pass
+        elif num < self.batch_size_penalty:
+            smps = list(self.pool[r])
+            exps.extend(smps)
+        else:
+            smps = list(random.sample(self.pool[r], self.batch_size_penalty))
             exps.extend(smps)
 
         r = self.rewards['negative']

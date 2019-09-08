@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import random
 import copy
 import os, datetime
@@ -51,7 +52,7 @@ class DQNAgent(Agent):
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
         self.env = env
-        self.memory = ExperienceReplayMemory(rewards=env.rewards)
+        self.memory = ExperienceReplayMemory()
         self.eps = EpsilonManager(epsilon)
         self.log = Logger()
         self.gamma = 0.99
@@ -97,8 +98,8 @@ class DQNAgent(Agent):
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws)
+                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
+                self.update_Q(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
@@ -158,13 +159,13 @@ class DQNAgent(Agent):
         chainer.serializers.load_npz(inputfile, model)
 
 
-class DDQNAgent(DQNAgent):
+class DQNAgentWithTarget(DQNAgent):
     """
     Double DeepQNetwork Agent
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
-        super(DDQNAgent, self).__init__(env, epsilon, init_model)
-        self.freq_target_update = 20
+        super(DQNAgentWithTarget, self).__init__(env, epsilon, init_model)
+        self.freq_target_update = 5
         self.target_model = copy.deepcopy(self.model)
 
     def train_episode(self, ep):
@@ -176,8 +177,8 @@ class DDQNAgent(DQNAgent):
             exp = (self.env.state_prst, action, state_next, reward, done)
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws)
+                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
+                self.update_Q(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 if step % self.freq_target_update == 0:
                     self.target_model = copy.deepcopy(self.model)
@@ -186,13 +187,13 @@ class DDQNAgent(DQNAgent):
             step += 1
         self.steps += step
 
-    def update_Q(self, s1s, acs, s2s, rws):
+    def update_Q(self, s1s, acs, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.model, s2s)
         Q_next_dash = self.compute_Q(self.target_model, s2s)
         target = copy.deepcopy(Q_next.data)
-        acs_max = target.max(axis=1)
-        target[self.batch_idxs, acs] = rws + self.gamma * Q_next_dash.data[:, acs_max]
+        acs_max = np.argmax(target, axis=1)
+        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next_dash.data[self.batch_idxs, acs_max]
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -200,14 +201,14 @@ class DDQNAgent(DQNAgent):
         self.optimizer.update()
 
 
-class MultiStepBootstrapDDQNAgent(DDQNAgent):
+class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
     """
     Double DeepQNetwork Agent
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
-        super(MultiStepBootstrapDDQNAgent, self).__init__(env, epsilon, init_model)
+        super(MultiStepBootstrapDQNAgent, self).__init__(env, epsilon, init_model)
         self._num_steps = 2
-        self.gammas = [self.gamma ** (i + 1) for i in range(self._num_steps)]
+        self.gammas = [self.gamma ** i for i in range(self._num_steps)]
 
     def train(self, arrays):
         self.steps = 0
@@ -222,37 +223,40 @@ class MultiStepBootstrapDDQNAgent(DDQNAgent):
             self.env.reset()
             self.memory.init_buffer()
             self.train_episode(ep)
-        DQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
+        MultiStepBootstrapDQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
 
     def train_episode(self, ep):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
             state_prst = self.env.state_prst.clone()
-            for i in range(self._num_steps):
-                action = self.policy(state_prst)
-                state_next, reward, done, scores = self.env.step(action)
-                exp = (state_prst, action, state_next, reward, done)
+            s1 = state_prst.clone()
+            for _ in range(self._num_steps):
+                ac = self.policy(s1)
+                s2, rw, done, scores = self.env.step(ac)
+                exp = (s1, ac, s2, rw, done)
                 self.memory.push_to_buffer(exp)
-                exp = self.memory.compute_multi_step_reward()
-                state_prst = state_next
+                s1 = s2
+                if done:
+                    break
+            exp = self.memory.remake_experience(self.gammas)
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws)
+                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
+                self.update_Q(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 if step % self.freq_target_update == 0:
                     self.target_model = copy.deepcopy(self.model)
             self.log.log_score(scores, ep, step)
-            self.env.state_prst = state_next
+            self.env.state_prst = self.memory.buffer[0][2]
             step += 1
         self.steps += step
 
-    def update_Q(self, s1s, acs, s2s, rws):
+    def update_Q(self, s1s, acs, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.target_model, s2s)
         target = copy.deepcopy(Q_next.data)
-        target[np.arange(self.memory.batch_size), acs] = rws + self.gamma * Q_next.data.max(axis=1)
+        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gammas[-1] * Q_next.data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -287,13 +291,9 @@ class EpsilonManager(object):
 
 
 class ExperienceReplayMemory(Memory):
-    def __init__(self, rewards, capacity=MEMORY_CAPACITY):
-        self.capacity = capacity
-        self.rewards = rewards
+    def __init__(self):
+        self.capacity = MEMORY_CAPACITY
         self.batch_size = BATCH_SIZE
-        self.batch_size_goal = int(0.20 * BATCH_SIZE)
-        self.batch_size_negative = int(0.4 * BATCH_SIZE)
-        self.batch_size_positive = BATCH_SIZE - self.batch_size_goal - self.batch_size_negative
 
     def init_memory(self):
         self.pool = defaultdict(lambda: deque(maxlen=self.capacity))
@@ -304,64 +304,60 @@ class ExperienceReplayMemory(Memory):
     def push_to_buffer(self, exp):
         self.buffer.append(exp)
 
-    def remake_
+    def remake_experience(self, gammas):
+        num = len(self.buffer)
+        s1s, acs, s2s, rws, dns = list(zip(*self.buffer))
+        rw = sum([g * r for g, r in zip(gammas[:num], rws)])
+        return (s1s[0], acs[0], s2s[-1], rw, dns[-1])
 
     def memorize(self, exp):
         r = exp[3]
         self.pool[r].append(exp)
 
     def experience_replay(self):
-        s1s = np.zeros((self.batch_size, NUM_SLOTS))
-        s2s = np.zeros((self.batch_size, NUM_SLOTS))
-        acs = np.zeros(self.batch_size)
-        rws = np.zeros(self.batch_size)
         exps = self.random_sample()
-        for i, exp in enumerate(exps):
-            s1s[i, :] = exp[0].array
-            acs[i] = exp[1]
-            s2s[i, :] = exp[2].array
-            rws[i] = exp[3]
-        acs = acs.astype(int)
-        return s1s, acs, s2s, rws
+        s1s, acs, s2s, rws, dns = list(zip(*exps))
+        s1s = [s.array for s in s1s]
+        s2s = [s.array for s in s2s]
+        s1s = np.array(s1s)
+        acs = np.array(acs).astype(int)
+        s2s = np.array(s2s)
+        rws = np.array(rws)
+        dns = np.array(dns).astype(int)
+        return s1s, acs, s2s, rws, dns
 
     def random_sample(self):
         exps = []
-        r = self.rewards['goal']
-        num = len(self.pool[r])
-        if num == 0:
-            pass
-        elif num < self.batch_size_goal:
-            smps = list(self.pool[r])
-            exps.extend(smps)
-        else:
-            smps = list(random.sample(self.pool[r], self.batch_size_goal))
-            exps.extend(smps)
+        nn = len(self.pool)
+        pp = int(np.ceil(self.batch_size / nn))
+        ss = 0
+        kv = [(k, len(v)) for k, v in self.pool.items()]
+        kv = sorted(kv, key=lambda x: x[1])
 
-        r = self.rewards['penalty']
-        num = len(self.pool[r])
-        if num == 0:
-            pass
-        elif num < self.batch_size_penalty:
-            smps = list(self.pool[r])
-            exps.extend(smps)
-        else:
-            smps = list(random.sample(self.pool[r], self.batch_size_penalty))
-            exps.extend(smps)
+        dcs = []
+        for k, v in kv:
+            if self.batch_size - ss <= pp:
+                dcs.append((k, self.batch_size - ss))
+                ss += self.batch_size - ss
+                nn -= 1
+            else:
+                if v < pp:
+                    dcs.append((k, v))
+                    ss += v
+                    nn -= 1
+                    pp = math.ceil((self.batch_size - ss) / nn)
+                else:
+                    dcs.append((k, pp))
+                    ss += pp
+                    nn -= 1
+                    pp = math.ceil((self.batch_size - ss) / nn)
 
-        r = self.rewards['negative']
-        num = len(self.pool[r])
-        if num < self.batch_size_negative:
-            smps = list(self.pool[r])
-            exps.extend(smps)
-        else:
-            smps = list(random.sample(self.pool[r], self.batch_size_negative))
-            exps.extend(smps)
-
-        num = len(exps)
-        r = self.rewards['positive']
-        smps = list(random.sample(self.pool[r], BATCH_SIZE - num))
-        exps.extend(smps)
+        exps = []
+        for k, v in dcs:
+            exps_ = list(random.sample(self.pool[k], v))
+            exps.extend(exps_)
         return exps
+
 
 
 class TDMemoryManager(object):

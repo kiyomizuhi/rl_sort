@@ -42,12 +42,7 @@ class Environment():
         self.action_space = list(self.dict_action_slotpair.keys())
         self._state_init = State(np.zeros(num_slots))
         self._num_slots = num_slots
-        self._rewards = {'goal':10, 'positive': 1, 'negative': -1, 'penalty': -3}
         self.reset()
-
-    @property
-    def rewards(self):
-        return self._rewards
 
     @property
     def num_slots(self):
@@ -88,7 +83,7 @@ class Environment():
 
         if score2 == NUM_SLOT_COMBS:
             done = True
-            score2 = 10
+            reward = 10
         else:
             done = False
 

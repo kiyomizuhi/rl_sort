@@ -132,7 +132,7 @@ class DQNAgent(Agent):
     def update_Q(self, s1s, acs, s2s, rws):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.model, s2s)
-        target = copy.deepcopy(Q_next.data)
+        target = copy.deepcopy(Q_prst.data)
         target[self.batch_idxs, acs] = rws + self.gamma * Q_next.data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
@@ -165,7 +165,7 @@ class DQNAgentWithTarget(DQNAgent):
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
         super(DQNAgentWithTarget, self).__init__(env, epsilon, init_model)
-        self.freq_target_update = 5
+        self.freq_target_update = 10
         self.target_model = copy.deepcopy(self.model)
 
     def train_episode(self, ep):
@@ -191,8 +191,8 @@ class DQNAgentWithTarget(DQNAgent):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.model, s2s)
         Q_next_dash = self.compute_Q(self.target_model, s2s)
-        target = copy.deepcopy(Q_next.data)
-        acs_max = np.argmax(target, axis=1)
+        target = copy.deepcopy(Q_prst.data)
+        acs_max = np.argmax(Q_next.data, axis=1)
         target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next_dash.data[self.batch_idxs, acs_max]
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
@@ -327,7 +327,6 @@ class ExperienceReplayMemory(Memory):
         return s1s, acs, s2s, rws, dns
 
     def random_sample(self):
-        exps = []
         nn = len(self.pool)
         pp = int(np.ceil(self.batch_size / nn))
         ss = 0
@@ -338,19 +337,15 @@ class ExperienceReplayMemory(Memory):
         for k, v in kv:
             if self.batch_size - ss <= pp:
                 dcs.append((k, self.batch_size - ss))
-                ss += self.batch_size - ss
-                nn -= 1
             else:
                 if v < pp:
                     dcs.append((k, v))
                     ss += v
-                    nn -= 1
-                    pp = math.ceil((self.batch_size - ss) / nn)
                 else:
                     dcs.append((k, pp))
                     ss += pp
-                    nn -= 1
-                    pp = math.ceil((self.batch_size - ss) / nn)
+            nn -= 1
+            pp = math.ceil((self.batch_size - ss) / nn)
 
         exps = []
         for k, v in dcs:

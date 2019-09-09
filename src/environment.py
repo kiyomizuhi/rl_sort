@@ -87,7 +87,7 @@ class Environment():
         else:
             done = False
 
-        return int(reward), done, (score1, score2)
+        return reward, done, (score1, score2)
 
 
 class StateEvaluator(object):

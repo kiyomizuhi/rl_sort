@@ -2,16 +2,17 @@ import numpy as np
 import math
 import random
 import copy
-import os, datetime
-from config import *
+import os
+import datetime
 from abc import ABC, abstractmethod
-from network import QNet
 import chainer
-from environment import State
 import pickle
 from collections import defaultdict
 from collections import deque
 
+from config import *
+from network import QNet
+from environment import State
 
 class Agent(ABC):
     """
@@ -65,7 +66,7 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
-        self.optimizer = chainer.optimizers.Adam()
+        self.optimizer = chainer.optimizers.Adam(alpha=0.0001)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
@@ -82,8 +83,8 @@ class DQNAgent(Agent):
         self.memory.init_memory()
         self.eps.init_epsilon()
         for ep, array in enumerate(arrays):
-            if ep % 100 == 0:
-                print(ep)
+            if ep % 100 == 99:
+                print(ep + 1)
             self.env.state_init = State(array)
             self.env.reset()
             self.train_episode(ep)
@@ -99,7 +100,7 @@ class DQNAgent(Agent):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws, dns)
+                self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
@@ -129,11 +130,11 @@ class DQNAgent(Agent):
             self.env.state_prst = state_next
             step += 1
 
-    def update_Q(self, s1s, acs, s2s, rws):
+    def update_model(self, s1s, acs, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.model, s2s)
         target = copy.deepcopy(Q_prst.data)
-        target[self.batch_idxs, acs] = rws + self.gamma * Q_next.data.max(axis=1)
+        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next.data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -161,12 +162,16 @@ class DQNAgent(Agent):
 
 class DQNAgentWithTarget(DQNAgent):
     """
-    Double DeepQNetwork Agent
+    DeepQNetwork Agent with target network
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
         super(DQNAgentWithTarget, self).__init__(env, epsilon, init_model)
-        self.freq_target_update = 10
+        self.freq_target_update = 20
         self.target_model = copy.deepcopy(self.model)
+
+    def sync_target_model(self, step):
+        if step % self.freq_target_update == 0:
+            self.target_model = copy.deepcopy(self.model)
 
     def train_episode(self, ep):
         done = False
@@ -178,22 +183,19 @@ class DQNAgentWithTarget(DQNAgent):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws, dns)
+                self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
-                if step % self.freq_target_update == 0:
-                    self.target_model = copy.deepcopy(self.model)
+                self.sync_target_model(step)
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
         self.steps += step
 
-    def update_Q(self, s1s, acs, s2s, rws, dns):
+    def update_model(self, s1s, acs, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
-        Q_next = self.compute_Q(self.model, s2s)
-        Q_next_dash = self.compute_Q(self.target_model, s2s)
+        Q_next = self.compute_Q(self.target_model, s2s)
         target = copy.deepcopy(Q_prst.data)
-        acs_max = np.argmax(Q_next.data, axis=1)
-        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next_dash.data[self.batch_idxs, acs_max]
+        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next.data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -243,7 +245,7 @@ class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_Q(s1s, acs, s2s, rws, dns)
+                self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 if step % self.freq_target_update == 0:
                     self.target_model = copy.deepcopy(self.model)
@@ -252,10 +254,10 @@ class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
             step += 1
         self.steps += step
 
-    def update_Q(self, s1s, acs, s2s, rws, dns):
+    def update_model(self, s1s, acs, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.target_model, s2s)
-        target = copy.deepcopy(Q_next.data)
+        target = copy.deepcopy(Q_prst.data)
         target[self.batch_idxs, acs] = rws + (1 - dns) * self.gammas[-1] * Q_next.data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
@@ -344,8 +346,8 @@ class ExperienceReplayMemory(Memory):
                 else:
                     dcs.append((k, pp))
                     ss += pp
-            nn -= 1
-            pp = math.ceil((self.batch_size - ss) / nn)
+                nn -= 1
+                pp = math.ceil((self.batch_size - ss) / nn)
 
         exps = []
         for k, v in dcs:

@@ -4,6 +4,7 @@ import random
 import copy
 import os
 import datetime
+import functools
 from abc import ABC, abstractmethod
 import chainer
 import pickle
@@ -59,8 +60,10 @@ class DQNAgent(Agent):
         self.gamma = 0.99
         self.actions = env.action_space
         self.batch_idxs = np.arange(BATCH_SIZE)
+        self.setup_model(init_model)
         env.render()
 
+    def setup_model(self, init_model):
         if init_model:
             self.model = QNet()
         else:
@@ -319,11 +322,9 @@ class ExperienceReplayMemory(Memory):
     def experience_replay(self):
         exps = self.random_sample()
         s1s, acs, s2s, rws, dns = list(zip(*exps))
-        s1s = [s.array for s in s1s]
-        s2s = [s.array for s in s2s]
-        s1s = np.array(s1s)
+        s1s = np.array([s.array for s in s1s])
         acs = np.array(acs).astype(int)
-        s2s = np.array(s2s)
+        s2s = np.array([s.array for s in s2s])
         rws = np.array(rws)
         dns = np.array(dns).astype(int)
         return s1s, acs, s2s, rws, dns
@@ -349,10 +350,8 @@ class ExperienceReplayMemory(Memory):
                 nn -= 1
                 pp = math.ceil((self.batch_size - ss) / nn)
 
-        exps = []
-        for k, v in dcs:
-            exps_ = list(random.sample(self.pool[k], v))
-            exps.extend(exps_)
+        expss = [list(random.sample(self.pool[k], v)) for k, v in dcs]
+        exps = functools.reduce(lambda x, y: x + y, expss)
         return exps
 
 

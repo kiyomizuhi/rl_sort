@@ -69,7 +69,7 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
-        self.optimizer = chainer.optimizers.Adam(alpha=0.0001)
+        self.optimizer = chainer.optimizers.Adam(alpha=0.01)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
@@ -83,6 +83,7 @@ class DQNAgent(Agent):
     def train(self, arrays):
         self.steps = 0
         self.log.init_log_scores(arrays)
+        self.log.init_log_losses(arrays)
         self.memory.init_memory()
         self.eps.init_epsilon()
         for ep, array in enumerate(arrays):
@@ -186,9 +187,10 @@ class DQNAgentWithTarget(DQNAgent):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_model(s1s, acs, s2s, rws, dns)
+                loss = self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 self.sync_target_model(step)
+                self.log.log_loss(loss, ep, step)
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
@@ -204,6 +206,7 @@ class DQNAgentWithTarget(DQNAgent):
         loss = chainer.functions.mean_squared_error(Q_prst, target)
         loss.backward()
         self.optimizer.update()
+        return loss.data
 
 
 class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
@@ -218,6 +221,7 @@ class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
     def train(self, arrays):
         self.steps = 0
         self.log.init_log_scores(arrays)
+        self.log.init_log_losses(arrays)
         self.memory.init_memory()
         self.memory.init_buffer()
         self.eps.init_epsilon()
@@ -248,8 +252,9 @@ class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_model(s1s, acs, s2s, rws, dns)
+                loss = self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
+                self.log.log_loss(loss, ep, step)
                 if step % self.freq_target_update == 0:
                     self.target_model = copy.deepcopy(self.model)
             self.log.log_score(scores, ep, step)
@@ -267,6 +272,7 @@ class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
         loss = chainer.functions.mean_squared_error(Q_prst, target)
         loss.backward()
         self.optimizer.update()
+        return loss.data
 
 
 class EpsilonManager(object):
@@ -385,6 +391,12 @@ class Logger(object):
     def log_score(self, scores, ep, step):
         self.scores1[ep, step] = scores[0]
         self.scores2[ep, step] = scores[1]
+
+    def init_log_losses(self, arrays):
+        self.losses = np.zeros((len(arrays), NUM_MAX_STEPS))
+
+    def log_loss(self, loss, ep, step):
+        self.losses[ep, step] = loss
 
 
 class FeatureEngineering(object):

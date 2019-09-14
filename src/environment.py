@@ -74,11 +74,10 @@ class Environment():
         # in general, reward func depends both on
         # current state and next state]
         score1, score2 = StateEvaluator(s1, s2).eval_state_scores()
-        reward = score2 - score1
 
-        if reward > 0:
+        if score2 > score1:
             reward = 1
-        elif reward < 0:
+        elif score2 < score1:
             reward = -1
 
         if score2 == NUM_SLOT_COMBS:

@@ -1,15 +1,14 @@
-import numpy as np
 import math
 import random
 import copy
 import os
 import datetime
 import functools
-from abc import ABC, abstractmethod
 import chainer
-import pickle
+import numpy as np
 from collections import defaultdict
 from collections import deque
+from abc import ABC, abstractmethod
 
 from config import *
 from network import QNet
@@ -57,7 +56,7 @@ class DQNAgent(Agent):
         self.memory = ExperienceReplayMemory()
         self.eps = EpsilonManager(epsilon)
         self.log = Logger()
-        self.gamma = 0.99
+        self.gamma = 0.95
         self.actions = env.action_space
         self.batch_idxs = np.arange(BATCH_SIZE)
         self.setup_model(init_model)
@@ -69,7 +68,7 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
-        self.optimizer = chainer.optimizers.Adam(alpha=0.01)
+        self.optimizer = chainer.optimizers.Adam(alpha=0.0001)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
@@ -77,8 +76,9 @@ class DQNAgent(Agent):
         if np.random.rand() < self.eps.epsilon:
             return np.random.choice(self.actions)
         else:
-            Q = self.compute_Q(self.model, state.array)
-            return np.argmax(Q.data)
+            s = state.array[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
+            Q = self.compute_Q(self.model, s)
+            return np.argmax(Q.data, axis=1)[0]
 
     def train(self, arrays):
         self.steps = 0
@@ -145,11 +145,11 @@ class DQNAgent(Agent):
         loss.backward()
         self.optimizer.update()
 
-    def compute_Q(self, model, array):
-        features = FeatureEngineering(array).get_features()
-        features = chainer.Variable(features.astype(np.float32))
-        Q = model.fwd(features)
-        return Q
+    def compute_Q(self, model, s):
+        fe = FeatureEngineering(s)
+        fe.fit()
+        features = chainer.Variable(fe.arro)
+        return model.fwd(features)
 
     @classmethod
     def save_model(cls, model, outputfile=DQN_MODEL_FILEPATH):
@@ -400,28 +400,19 @@ class Logger(object):
 
 
 class FeatureEngineering(object):
-    def __init__(self, array):
-        if array.ndim == 1:
-            self.array = array[np.newaxis, :]
-        elif array.ndim == 2:
-            self.array = array
-        else:
-            raise Exception('the input array must either be 1 dim or 2 dim!')
-        self.features = np.zeros((array.shape[0], INPUT_LAYER_SIZE))
+    def __init__(self, arrs):
+        self.arri = arrs
         self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
-        self.min_max_scale()
 
-    def get_features(self):
-        self.features[:, :] = self.array_scaled
-        return self.features
+    def fit(self):
+        arr = self.arri[:, np.newaxis, :] - self.arri[:, :, np.newaxis]
+        self.arro = arr[:, self.slice1, self.slice2]
+        self.arro[self.arro > 0] = 1.
+        self.arro[self.arro < 0] = -1.
+        self.arro = self.arro.astype(np.float32)
 
-    def min_max_scale(self):
-        min_array = self.array.min(axis=1, keepdims=True)
-        max_array = self.array.max(axis=1, keepdims=True)
-        delta = max_array - min_array
-        delta[delta == 0] = 1.0
-        self.array_scaled = (self.array - min_array) / delta
-
+    def augment_normal_noise(self):
+        self.arro += np.random.normal(scale=0.02, size=self.arro.shape)
 
 if __name__ == "__main__":
     pass

@@ -91,15 +91,12 @@ class Environment():
 
 class StateEvaluator(object):
     def __init__(self, s1, s2):
-        self.arrs = [s1.array, s2.array]
+        self.arrs = np.vstack((s1.array, s2.array))
         self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
 
     def eval_state_scores(self):
-        return [self.eval_state_score(arr) for arr in self.arrs]
-
-    def eval_state_score(self, arr):
-        comp = arr[np.newaxis, :] - arr[:, np.newaxis]
-        comp_flat = comp[self.slice1, self.slice2]
-        comp_flat[comp_flat > 0] = 1
-        comp_flat[comp_flat < 0] = -1
-        return comp_flat.sum()
+        arrs = self.arrs[:, np.newaxis, :] - self.arrs[:, :, np.newaxis]
+        arrs = arrs[:, self.slice1, self.slice2]
+        arrs[arrs > 0] = 1
+        arrs[arrs < 0] = -1
+        return arrs.sum(axis=1)

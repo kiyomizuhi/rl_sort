@@ -68,17 +68,20 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
-        self.optimizer = chainer.optimizers.Adam(alpha=0.0001)
+        self.optimizer = chainer.optimizers.Adam(alpha=0.0003)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
+
+    def get_maxQ_action(self, state):
+        s = state.array[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
+        Q = self.compute_Q(self.model, s)
+        return np.argmax(Q.data)
 
     def policy(self, state):
         if np.random.rand() < self.eps.epsilon:
             return np.random.choice(self.actions)
         else:
-            s = state.array[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
-            Q = self.compute_Q(self.model, s)
-            return np.argmax(Q.data, axis=1)[0]
+            return self.get_maxQ_action(state)
 
     def train(self, arrays):
         self.steps = 0
@@ -104,8 +107,9 @@ class DQNAgent(Agent):
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                self.update_model(s1s, acs, s2s, rws, dns)
+                loss = self.update_model(s1s, acs, s2s, rws, dns)
                 self.eps.reduce_epsilon()
+                self.log.log_loss(loss, ep, step)
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
@@ -114,7 +118,6 @@ class DQNAgent(Agent):
     def apply(self, arrays):
         self.steps = 0
         self.log.init_log_scores(arrays)
-        self.memory.init_memory()
         for ep, array in enumerate(arrays):
             self.eps.init_epsilon()
             self.env.state_init = State(array)
@@ -125,11 +128,8 @@ class DQNAgent(Agent):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
-            Q_prst = self.compute_Q(self.model, self.env.state_prst.array)
-            action = np.argmax(Q_prst.data)
-            state_next, reward, done, scores = self.env.step(action)
-            exp = (self.env.state_prst, action, state_next, reward, done)
-            self.memory.memorize(exp)
+            action = self.get_maxQ_action(self.env.state_prst)
+            state_next, _, done, scores = self.env.step(action)
             self.log.log_score(scores, ep, step)
             self.env.state_prst = state_next
             step += 1
@@ -144,6 +144,7 @@ class DQNAgent(Agent):
         loss = chainer.functions.mean_squared_error(Q_prst, target)
         loss.backward()
         self.optimizer.update()
+        return loss.data
 
     def compute_Q(self, model, s):
         fe = FeatureEngineering(s)
@@ -183,7 +184,7 @@ class DQNAgentWithTarget(DQNAgent):
         while not done and step < NUM_MAX_STEPS:
             action = self.policy(self.env.state_prst)
             state_next, reward, done, scores = self.env.step(action)
-            exp = (self.env.state_prst, action, state_next, reward, done)
+            exp = (self.env.state_prst, action, state_next, reward, done, scores[0])
             self.memory.memorize(exp)
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
@@ -323,11 +324,12 @@ class ExperienceReplayMemory(Memory):
 
     def memorize(self, exp):
         r = exp[3]
-        self.pool[r].append(exp)
+        s = exp[5] // 5
+        self.pool[(r, s)].append(exp)
 
     def experience_replay(self):
         exps = self.random_sample()
-        s1s, acs, s2s, rws, dns = list(zip(*exps))
+        s1s, acs, s2s, rws, dns, _ = list(zip(*exps))
         s1s = np.array([s.array for s in s1s])
         acs = np.array(acs).astype(int)
         s2s = np.array([s.array for s in s2s])

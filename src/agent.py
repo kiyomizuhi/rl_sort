@@ -68,18 +68,21 @@ class DQNAgent(Agent):
         else:
             self.model = QNet()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
-        self.optimizer = chainer.optimizers.Adam(alpha=0.0003)
+        self.optimizer = chainer.optimizers.Adam(alpha=0.00001)
         self.optimizer.setup(self.model)
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
     def get_maxQ_action(self, state):
         s = state.array[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
         Q = self.compute_Q(self.model, s)
-        return np.argmax(Q.data)
+        Q1 = Q.data[:, :NUM_SLOTS].squeeze()
+        Q2 = Q.data[:, NUM_SLOTS:].squeeze()
+        return (np.argmax(Q1), np.argmax(Q2))
 
     def policy(self, state):
         if np.random.rand() < self.eps.epsilon:
-            return np.random.choice(self.actions)
+            slotpair = np.random.choice(self.actions, size=2, replace=False)
+            return tuple(slotpair)
         else:
             return self.get_maxQ_action(state)
 
@@ -101,13 +104,13 @@ class DQNAgent(Agent):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
-            action = self.policy(self.env.state_prst)
-            state_next, reward, done, scores = self.env.step(action)
-            exp = (self.env.state_prst, action, state_next, reward, done)
+            actions = self.policy(self.env.state_prst)
+            state_next, reward, scores, done = self.env.step(actions)
+            exp = (self.env.state_prst, actions[0], actions[1], state_next, reward, scores[0], done)
             self.memory.memorize(exp)
-            if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                loss = self.update_model(s1s, acs, s2s, rws, dns)
+            if self.steps > BATCH_SIZE_BUFFER:
+                s1s, a1s, a2s, s2s, rws, dns = self.memory.experience_replay()
+                loss = self.update_model(s1s, a1s, a2s, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 self.log.log_loss(loss, ep, step)
             self.log.log_score(scores, ep, step)
@@ -134,11 +137,12 @@ class DQNAgent(Agent):
             self.env.state_prst = state_next
             step += 1
 
-    def update_model(self, s1s, acs, s2s, rws, dns):
+    def update_model(self, s1s, a1s, a2s, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.model, s2s)
         target = copy.deepcopy(Q_prst.data)
-        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next.data.max(axis=1)
+        target[self.batch_idxs, a1s] = rws + (1 - dns) * self.gamma * Q_next[:, :NUM_SLOTS].data.max(axis=1)
+        target[self.batch_idxs, a2s + NUM_SLOTS] = rws + (1 - dns) * self.gamma * Q_next[:, NUM_SLOTS:].data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -171,7 +175,7 @@ class DQNAgentWithTarget(DQNAgent):
     """
     def __init__(self, env, epsilon=1.0, init_model=False):
         super(DQNAgentWithTarget, self).__init__(env, epsilon, init_model)
-        self.freq_target_update = 20
+        self.freq_target_update = 10
         self.target_model = copy.deepcopy(self.model)
 
     def sync_target_model(self, step):
@@ -182,13 +186,13 @@ class DQNAgentWithTarget(DQNAgent):
         done = False
         step = 0
         while not done and step < NUM_MAX_STEPS:
-            action = self.policy(self.env.state_prst)
-            state_next, reward, done, scores = self.env.step(action)
-            exp = (self.env.state_prst, action, state_next, reward, done, scores[0])
+            actions = self.policy(self.env.state_prst)
+            state_next, reward, scores, done = self.env.step(actions)
+            exp = (self.env.state_prst, actions[0], actions[1], state_next, reward, scores[0], done)
             self.memory.memorize(exp)
-            if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                loss = self.update_model(s1s, acs, s2s, rws, dns)
+            if self.steps > BATCH_SIZE_BUFFER:
+                s1s, a1s, a2s, s2s, rws, dns = self.memory.experience_replay()
+                loss = self.update_model(s1s, a1s, a2s, s2s, rws, dns)
                 self.eps.reduce_epsilon()
                 self.sync_target_model(step)
                 self.log.log_loss(loss, ep, step)
@@ -197,77 +201,12 @@ class DQNAgentWithTarget(DQNAgent):
             step += 1
         self.steps += step
 
-    def update_model(self, s1s, acs, s2s, rws, dns):
+    def update_model(self, s1s, a1s, a2s, s2s, rws, dns):
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.target_model, s2s)
         target = copy.deepcopy(Q_prst.data)
-        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gamma * Q_next.data.max(axis=1)
-        target = chainer.Variable(target.astype(np.float32))
-        self.model.cleargrads()
-        loss = chainer.functions.mean_squared_error(Q_prst, target)
-        loss.backward()
-        self.optimizer.update()
-        return loss.data
-
-
-class MultiStepBootstrapDQNAgent(DQNAgentWithTarget):
-    """
-    Double DeepQNetwork Agent
-    """
-    def __init__(self, env, epsilon=1.0, init_model=False):
-        super(MultiStepBootstrapDQNAgent, self).__init__(env, epsilon, init_model)
-        self._num_steps = 2
-        self.gammas = [self.gamma ** i for i in range(self._num_steps)]
-
-    def train(self, arrays):
-        self.steps = 0
-        self.log.init_log_scores(arrays)
-        self.log.init_log_losses(arrays)
-        self.memory.init_memory()
-        self.memory.init_buffer()
-        self.eps.init_epsilon()
-        for ep, array in enumerate(arrays):
-            if ep % 100 == 0:
-                print(ep)
-            self.env.state_init = State(array)
-            self.env.reset()
-            self.memory.init_buffer()
-            self.train_episode(ep)
-        MultiStepBootstrapDQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
-
-    def train_episode(self, ep):
-        done = False
-        step = 0
-        while not done and step < NUM_MAX_STEPS:
-            state_prst = self.env.state_prst.clone()
-            s1 = state_prst.clone()
-            for _ in range(self._num_steps):
-                ac = self.policy(s1)
-                s2, rw, done, scores = self.env.step(ac)
-                exp = (s1, ac, s2, rw, done)
-                self.memory.push_to_buffer(exp)
-                s1 = s2
-                if done:
-                    break
-            exp = self.memory.remake_experience(self.gammas)
-            self.memory.memorize(exp)
-            if self.steps > BATCH_SIZE:
-                s1s, acs, s2s, rws, dns = self.memory.experience_replay()
-                loss = self.update_model(s1s, acs, s2s, rws, dns)
-                self.eps.reduce_epsilon()
-                self.log.log_loss(loss, ep, step)
-                if step % self.freq_target_update == 0:
-                    self.target_model = copy.deepcopy(self.model)
-            self.log.log_score(scores, ep, step)
-            self.env.state_prst = self.memory.buffer[0][2]
-            step += 1
-        self.steps += step
-
-    def update_model(self, s1s, acs, s2s, rws, dns):
-        Q_prst = self.compute_Q(self.model, s1s)
-        Q_next = self.compute_Q(self.target_model, s2s)
-        target = copy.deepcopy(Q_prst.data)
-        target[self.batch_idxs, acs] = rws + (1 - dns) * self.gammas[-1] * Q_next.data.max(axis=1)
+        target[self.batch_idxs, a1s] = rws + (1 - dns) * self.gamma * Q_next[:, :NUM_SLOTS].data.max(axis=1)
+        target[self.batch_idxs, a2s + NUM_SLOTS] = rws + (1 - dns) * self.gamma * Q_next[:, NUM_SLOTS:].data.max(axis=1)
         target = chainer.Variable(target.astype(np.float32))
         self.model.cleargrads()
         loss = chainer.functions.mean_squared_error(Q_prst, target)
@@ -306,6 +245,8 @@ class ExperienceReplayMemory(Memory):
     def __init__(self):
         self.capacity = MEMORY_CAPACITY
         self.batch_size = BATCH_SIZE
+        self.interval = 10
+        self.sample_size_priority = self.capacity // 10
 
     def init_memory(self):
         self.pool = defaultdict(lambda: deque(maxlen=self.capacity))
@@ -318,36 +259,50 @@ class ExperienceReplayMemory(Memory):
 
     def remake_experience(self, gammas):
         num = len(self.buffer)
-        s1s, acs, s2s, rws, dns = list(zip(*self.buffer))
+        s1s, acs, s2s, rws, scs, dns = list(zip(*self.buffer))
         rw = sum([g * r for g, r in zip(gammas[:num], rws)])
-        return (s1s[0], acs[0], s2s[-1], rw, dns[-1])
+        return (s1s[0], acs[0], s2s[-1], rw, scs[0], dns[-1])
 
     def memorize(self, exp):
-        r = exp[3]
-        s = exp[5] // 5
-        self.pool[(r, s)].append(exp)
+        r = exp[4]
+        s = exp[5] // self.interval
+        self.pool[(s, r)].append(exp)
 
     def experience_replay(self):
         exps = self.random_sample()
-        s1s, acs, s2s, rws, dns, _ = list(zip(*exps))
+        s1s, a1s, a2s, s2s, rws, _, dns = list(zip(*exps))
         s1s = np.array([s.array for s in s1s])
-        acs = np.array(acs).astype(int)
+        a1s = np.array(a1s).astype(int)
+        a2s = np.array(a2s).astype(int)
         s2s = np.array([s.array for s in s2s])
         rws = np.array(rws)
         dns = np.array(dns).astype(int)
-        return s1s, acs, s2s, rws, dns
+        return s1s, a1s, a2s, s2s, rws, dns
 
     def random_sample(self):
         nn = len(self.pool)
-        pp = int(np.ceil(self.batch_size / nn))
         ss = 0
-        kv = [(k, len(v)) for k, v in self.pool.items()]
-        kv = sorted(kv, key=lambda x: x[1])
+        kvs = [(k, len(v)) for k, v in self.pool.items()]
+        max_k0 = max([kv[0][0] for kv in kvs])
+        kvsp = [kv for kv in kvs if kv[0][0] == max_k0]
+        kvsi = [kv for kv in kvs if kv[0][0] != max_k0]
+        kvs = kvsp + sorted(kvsi, key=lambda x: x[1])
+        len_kvsp, len_kvsi = len(kvsp), len(kvsi)
+        pp = int(np.ceil((self.batch_size - len_kvsp * self.sample_size_priority) / len_kvsi))
 
         dcs = []
-        for k, v in kv:
+        for ii, kv in enumerate(kvs):
+            k, v = kv
             if self.batch_size - ss <= pp:
                 dcs.append((k, self.batch_size - ss))
+                break
+            elif ii < len_kvsp:
+                if v < self.sample_size_priority:
+                    dcs.append((k, v))
+                    ss += v
+                else:
+                    dcs.append((k, self.sample_size_priority))
+                    ss += self.sample_size_priority
             else:
                 if v < pp:
                     dcs.append((k, v))
@@ -355,9 +310,7 @@ class ExperienceReplayMemory(Memory):
                 else:
                     dcs.append((k, pp))
                     ss += pp
-                nn -= 1
-                pp = math.ceil((self.batch_size - ss) / nn)
-
+            pp = math.ceil((self.batch_size - ss) / (nn - ii - 1))
         expss = [list(random.sample(self.pool[k], v)) for k, v in dcs]
         exps = functools.reduce(lambda x, y: x + y, expss)
         return exps

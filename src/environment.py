@@ -2,7 +2,6 @@ import enum
 import numpy as np
 import copy
 from config import NUM_SLOTS, NUM_SLOT_COMBS, NUM_SLOT_COMBS
-from action_slotpair import generate_dict_action_slotpair
 
 
 class State():
@@ -38,8 +37,7 @@ class Environment():
         - reward_function: state, state' -> reward
     """
     def __init__(self, num_slots=NUM_SLOTS):
-        self.dict_action_slotpair, self.dict_slotpair_action = generate_dict_action_slotpair()
-        self.action_space = list(self.dict_action_slotpair.keys())
+        self.action_space = list(range(NUM_SLOTS))
         self._state_init = State(np.zeros(num_slots))
         self._num_slots = num_slots
         self.reset()
@@ -64,25 +62,25 @@ class Environment():
     def reset(self):
         self.state_prst = self._state_init.clone()
 
-    def step(self, action):
-        slot_pair = self.dict_action_slotpair[action]
-        state_next = self.state_prst.swap_pair(slot_pair)
+    def step(self, actions):
+        state_next = self.state_prst.swap_pair(actions)
         reward, done, scores = self.reward_func(self.state_prst, state_next)
-        return state_next, reward, done, scores
+        return state_next, reward, scores, done
 
     def reward_func(self, s1, s2):
         # in general, reward func depends both on
         # current state and next state]
         score1, score2 = StateEvaluator(s1, s2).eval_state_scores()
-
         if score2 > score1:
             reward = 1
         elif score2 < score1:
             reward = -1
+        elif score1 == score2:
+            reward = 0
 
         if score2 == NUM_SLOT_COMBS:
             done = True
-            reward = 10
+            reward = 5
         else:
             done = False
 

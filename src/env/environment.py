@@ -1,11 +1,11 @@
 import enum
 import numpy as np
 import copy
-from config import NUM_SLOTS, NUM_SLOT_COMBS, NUM_SLOT_COMBS
-from action_slotpair import generate_dict_action_slotpair
+from ..constants.config import NUM_SLOTS, NUM_SLOT_COMBS, NUM_SLOT_COMBS
+from ..constants.action_slotpair import generate_dict_action_slotpair
 
 
-class State():
+class State(object):
     def __init__(self, array):
         self.array = array
 
@@ -29,7 +29,7 @@ class State():
         st.array[s2], st.array[s1] = st.array[s1], st.array[s2]
         return st
 
-class Environment():
+class Environment(object):
     """
     Defines environment.
         - available states

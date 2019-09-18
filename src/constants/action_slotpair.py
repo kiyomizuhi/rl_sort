@@ -1,4 +1,4 @@
-from config import NUM_SLOTS
+from .config import NUM_SLOTS
 import numpy as np
 import itertools
 

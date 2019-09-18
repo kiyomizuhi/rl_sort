@@ -2,7 +2,7 @@ import numpy as np
 from chainer import Chain, initializers
 import chainer.functions as F
 import chainer.links as L
-from config import *
+from ..constants.config import *
 
 class QNet(Chain):
     def __init__(self):

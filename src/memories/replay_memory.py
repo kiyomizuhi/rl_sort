@@ -4,7 +4,7 @@ import functools
 import numpy as np
 import collections
 
-from ..constants.config import *
+from rlsort.constants.config import *
 from ..memory import Memory
 
 
@@ -29,8 +29,8 @@ class ExperienceReplayMemory(Memory):
         return (s1s[0], acs[0], s2s[-1], rw, dns[-1])
 
     def memorize(self, exp):
-        s1 = exp.sc1 // 5
-        s2 = exp.sc2 // 5
+        s1 = exp.sc1 // 10
+        s2 = exp.sc2 // 10
         self.pool[(s1, s2)].append(exp)
 
     def experience_replay(self):

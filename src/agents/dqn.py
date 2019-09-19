@@ -11,6 +11,9 @@ from ..constants.config import *
 from ..networks.network import QNet
 from ..env.environment import State
 from ..memories.replay_memory import ExperienceReplayMemory
+from ..epsilon.epsilon import EpsilonManager
+from ..logger.logger import Logger
+from ..feature_engineering.feature_engineering import FeatureEngineering
 
 expr = collections.namedtuple('Exp', ['s1', 'ac', 's2', 'rw', 'sc1', 'sc2', 'dn'])
 

@@ -11,6 +11,7 @@ from ..constants.config import *
 from ..networks.network import QNet
 from ..env.environment import State
 from ..memories.replay_memory import ExperienceReplayMemory
+from ..epsilon.epsilon import EpsilonManager
 
 expr = collections.namedtuple('Exp', ['s1', 'ac', 's2', 'rw', 'sc1', 'sc2', 'dn'])
 
@@ -53,6 +54,7 @@ class DQNAgentWithTarget(DQNAgent):
         self.steps += step
 
     def update_model(self, s1s, acs, s2s, rws, dns):
+        sps = [s1s.shape, s1s.shape, acs.shape, s2s.shape, rws.shape, dns.shape]
         Q_prst = self.compute_Q(self.model, s1s)
         Q_next = self.compute_Q(self.target_model, s2s)
         target = copy.deepcopy(Q_prst.data)

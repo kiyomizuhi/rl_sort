@@ -34,7 +34,7 @@ class DQNAgentWithTarget(DQNAgent):
         step = 0
         while not done and step < NUM_MAX_STEPS:
             action = self.policy(self.env.state_prst)
-            state_next, reward, done, scores = self.env.step(action)
+            state_next, reward, scores, done = self.env.step(action)
             self.memory.memorize(expr(s1=self.env.state_prst,
                                       ac=action,
                                       s2=state_next,

@@ -68,7 +68,7 @@ class Environment(object):
         slot_pair = self.dict_action_slotpair[action]
         state_next = self.state_prst.swap_pair(slot_pair)
         reward, done, scores = self.reward_func(self.state_prst, state_next)
-        return state_next, reward, done, scores
+        return state_next, reward, scores, done
 
     def reward_func(self, s1, s2):
         # in general, reward func depends both on

@@ -1,5 +1,6 @@
 from . import agent
 from . import memory
+from . import utils
 from . import logger
 from . import agents
 from . import constants

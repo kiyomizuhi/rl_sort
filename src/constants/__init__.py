@@ -1,2 +1,2 @@
-from . import config
-from . import action_slotpair
+from .config import *
+from .action_slotpair import *

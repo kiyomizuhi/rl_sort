@@ -9,13 +9,18 @@ import collections
 from ..agent import Agent
 from ..constants.config import *
 from ..networks.network import QNet
-from ..env.environment import State
 from ..memories.replay_memory import ExperienceReplayMemory
 from ..epsilon.epsilon import EpsilonManager
 from ..logger.logger import Logger
 from ..feature_engineering.feature_engineering import FeatureEngineering
 
-expr = collections.namedtuple('Exp', ['s1', 'ac', 's2', 'rw', 'sc1', 'sc2', 'dn'])
+expr = collections.namedtuple('Exp', ['state1',
+                                      'action',
+                                      'state2',
+                                      'reward',
+                                      'score1',
+                                      'score2',
+                                      'done'])
 
 class DQNAgent(Agent):
     """
@@ -43,7 +48,7 @@ class DQNAgent(Agent):
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
     def get_maxQ_action(self, state):
-        s = state.array[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
+        s = state[np.newaxis, :] # (NUM_SLOTS,) -> (1, NUM_SLOTS)
         Q = self.compute_Q(self.model, s)
         return np.argmax(Q.data)
 
@@ -53,16 +58,16 @@ class DQNAgent(Agent):
         else:
             return self.get_maxQ_action(state)
 
-    def train(self, arrays):
+    def train(self, states):
         self.steps = 0
-        self.log.init_log_scores(arrays)
-        self.log.init_log_losses(arrays)
+        self.log.init_log_scores(states)
+        self.log.init_log_losses(states)
         self.memory.init_memory()
         self.eps.init_epsilon()
-        for ep, array in enumerate(arrays):
+        for ep, state in enumerate(states):
             if ep % 100 == 99:
                 print(ep + 1)
-            self.env.state_init = State(array)
+            self.env.state_init = state
             self.env.reset()
             self.train_episode(ep)
         DQNAgent.save_model(self.model, DQN_MODEL_FILEPATH)
@@ -73,13 +78,13 @@ class DQNAgent(Agent):
         while not done and step < NUM_MAX_STEPS:
             action = self.policy(self.env.state_prst)
             state_next, reward, scores, done = self.env.step(action)
-            self.memory.memorize(expr(s1=self.env.state_prst,
-                                      ac=action,
-                                      s2=state_next,
-                                      rw=reward,
-                                      sc1=scores[0],
-                                      sc2=scores[1],
-                                      dn=done))
+            self.memory.memorize(expr(state1=self.env.state_prst,
+                                      action=action,
+                                      state2=state_next,
+                                      reward=reward,
+                                      score1=scores[0],
+                                      score2=scores[1],
+                                      done=done))
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
                 loss = self.update_model(s1s, acs, s2s, rws, dns)
@@ -90,12 +95,12 @@ class DQNAgent(Agent):
             step += 1
         self.steps += step
 
-    def apply(self, arrays):
+    def apply(self, states):
         self.steps = 0
-        self.log.init_log_scores(arrays)
-        for ep, array in enumerate(arrays):
+        self.log.init_log_scores(states)
+        for ep, state in enumerate(states):
             self.eps.init_epsilon()
-            self.env.state_init = State(array)
+            self.env.state_init = state
             self.env.reset()
             self.apply_episode(ep)
 

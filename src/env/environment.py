@@ -5,30 +5,6 @@ from ..constants.config import NUM_SLOTS, NUM_SLOT_COMBS, NUM_SLOT_COMBS
 from ..constants.action_slotpair import generate_dict_action_slotpair
 
 
-class State(object):
-    def __init__(self, array):
-        self.array = array
-
-    def __repr__(self):
-        str_ = ', '.join([str(arr) for arr in self.array])
-        return f"<State: [{str_}]>"
-
-    def clone(self):
-        array = copy.deepcopy(self.array)
-        return State(array)
-
-    def __hash__(self):
-        return hash(tuple(self.array))
-
-    def __eq__(self, state):
-        return (self.array == state.array).all()
-
-    def swap_pair(self, slot_pair):
-        st = self.clone()
-        s1, s2 = slot_pair
-        st.array[s2], st.array[s1] = st.array[s1], st.array[s2]
-        return st
-
 class Environment(object):
     """
     Defines environment.
@@ -40,7 +16,7 @@ class Environment(object):
     def __init__(self, num_slots=NUM_SLOTS):
         self.dict_action_slotpair, self.dict_slotpair_action = generate_dict_action_slotpair()
         self.action_space = list(self.dict_action_slotpair.keys())
-        self._state_init = State(np.zeros(num_slots))
+        self._state_init = np.zeros(num_slots)
         self._num_slots = num_slots
         self.reset()
 
@@ -54,7 +30,7 @@ class Environment(object):
 
     @state_init.setter
     def state_init(self, state):
-        if len(state.array) != self.num_slots:
+        if len(state) != self.num_slots:
             raise Exception(f'the number of slots must be {self.num_slots}')
         self._state_init = state
 
@@ -62,11 +38,16 @@ class Environment(object):
         print(self.state_prst)
 
     def reset(self):
-        self.state_prst = self._state_init.clone()
+        self.state_prst = copy.deepcopy(self._state_init)
+
+    def swap_pair(self, slot_pair):
+        state = copy.deepcopy(self.state_prst)
+        state[slot_pair[1]], state[slot_pair[0]] = state[slot_pair[0]], state[slot_pair[1]]
+        return state
 
     def step(self, action):
         slot_pair = self.dict_action_slotpair[action]
-        state_next = self.state_prst.swap_pair(slot_pair)
+        state_next = self.swap_pair(slot_pair)
         reward, done, scores = self.reward_func(self.state_prst, state_next)
         return state_next, reward, scores, done
 
@@ -91,7 +72,7 @@ class Environment(object):
 
 class StateEvaluator(object):
     def __init__(self, s1, s2):
-        self.arrs = np.vstack((s1.array, s2.array))
+        self.arrs = np.vstack((s1, s2))
         self.slice1, self.slice2 = np.triu_indices(NUM_SLOTS, 1)
 
     def eval_state_scores(self):

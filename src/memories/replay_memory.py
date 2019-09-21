@@ -5,8 +5,7 @@ import numpy as np
 import collections
 
 from rlsort.constants.config import *
-from ..memory import Memory
-
+from rlsort.memory import Memory
 
 class ExperienceReplayMemory(Memory):
     def __init__(self):
@@ -29,16 +28,16 @@ class ExperienceReplayMemory(Memory):
         return (s1s[0], acs[0], s2s[-1], rw, dns[-1])
 
     def memorize(self, exp):
-        s1 = exp.sc1 // 10
-        s2 = exp.sc2 // 10
+        s1 = exp.score1 // 10
+        s2 = exp.score2 // 10
         self.pool[(s1, s2)].append(exp)
 
     def experience_replay(self):
         exps = self.random_sample()
         s1s, acs, s2s, rws, _, _, dns = list(zip(*exps))
-        s1s = np.array([s.array for s in s1s])
+        s1s = np.array(s1s)
         acs = np.array(acs).astype(int)
-        s2s = np.array([s.array for s in s2s])
+        s2s = np.array(s2s)
         rws = np.array(rws)
         dns = np.array(dns).astype(int)
         return s1s, acs, s2s, rws, dns

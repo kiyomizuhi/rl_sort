@@ -9,12 +9,16 @@ from ..agent import Agent
 from .dqn import DQNAgent
 from ..constants.config import *
 from ..networks.network import QNet
-from ..env.environment import State
 from ..memories.replay_memory import ExperienceReplayMemory
 from ..epsilon.epsilon import EpsilonManager
 
-expr = collections.namedtuple('Exp', ['s1', 'ac', 's2', 'rw', 'sc1', 'sc2', 'dn'])
-
+expr = collections.namedtuple('Exp', ['state1',
+                                      'action',
+                                      'state2',
+                                      'reward',
+                                      'score1',
+                                      'score2',
+                                      'done'])
 
 class DQNAgentWithTarget(DQNAgent):
     """
@@ -35,13 +39,13 @@ class DQNAgentWithTarget(DQNAgent):
         while not done and step < NUM_MAX_STEPS:
             action = self.policy(self.env.state_prst)
             state_next, reward, scores, done = self.env.step(action)
-            self.memory.memorize(expr(s1=self.env.state_prst,
-                                      ac=action,
-                                      s2=state_next,
-                                      rw=reward,
-                                      sc1=scores[0],
-                                      sc2=scores[1],
-                                      dn=done))
+            self.memory.memorize(expr(state1=self.env.state_prst,
+                                      action=action,
+                                      state2=state_next,
+                                      reward=reward,
+                                      score1=scores[0],
+                                      score2=scores[1],
+                                      done=done))
             if self.steps > BATCH_SIZE:
                 s1s, acs, s2s, rws, dns = self.memory.experience_replay()
                 loss = self.update_model(s1s, acs, s2s, rws, dns)

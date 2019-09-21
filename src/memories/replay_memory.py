@@ -15,18 +15,6 @@ class ExperienceReplayMemory(Memory):
     def init_memory(self):
         self.pool = collections.defaultdict(lambda: collections.deque(maxlen=self.capacity))
 
-    def init_buffer(self):
-        self.buffer = collections.deque(maxlen=3)
-
-    def push_to_buffer(self, exp):
-        self.buffer.append(exp)
-
-    def remake_experience(self, gammas):
-        num = len(self.buffer)
-        s1s, acs, s2s, rws, c1s, c2s, dns = list(zip(*self.buffer))
-        rw = sum([g * r for g, r in zip(gammas[:num], rws)])
-        return (s1s[0], acs[0], s2s[-1], rw, dns[-1])
-
     def memorize(self, exp):
         s1 = exp.score1 // 10
         s2 = exp.score2 // 10
@@ -66,3 +54,21 @@ class ExperienceReplayMemory(Memory):
         expss = [list(random.sample(self.pool[k], v)) for k, v in dcs]
         exps = functools.reduce(lambda x, y: x + y, expss)
         return exps
+
+
+class ExperienceReplayMemoryWithBuffer(ExperienceReplayMemory):
+    def __init__(self, boot_step=3):
+        super(ExperienceReplayMemoryWithBuffer, self).__init__()
+        self.boot_step = boot_step
+
+    def init_buffer(self):
+        self.buffer = collections.deque(maxlen=self.boot_step)
+
+    def push_to_buffer(self, exp):
+        self.buffer.append(exp)
+
+    def remake_experience(self, gammas):
+        num = len(self.buffer)
+        s1s, acs, s2s, rws, _, _, dns = list(zip(*self.buffer))
+        rw = sum([g * r for g, r in zip(gammas[:num], rws)])
+        return (s1s[0], acs[0], s2s[-1], rw, dns[-1])

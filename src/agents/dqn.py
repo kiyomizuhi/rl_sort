@@ -8,7 +8,7 @@ import collections
 
 from ..agent import Agent
 from ..constants.config import *
-from ..networks.network import QNet
+from ..networks.network import *
 from ..memories.replay_memory import ExperienceReplayMemory
 from ..epsilon.epsilon import EpsilonManager
 from ..logger.logger import Logger
@@ -39,12 +39,13 @@ class DQNAgent(Agent):
 
     def setup_model(self, init_model):
         if init_model:
-            self.model = QNet()
+            self.model = QNetNout()
         else:
-            self.model = QNet()
+            self.model = QNetNout()
             DQNAgent.load_model(self.model, DQN_MODEL_FILEPATH)
         self.optimizer = chainer.optimizers.Adam(alpha=0.0003)
         self.optimizer.setup(self.model)
+        self.model.lq.disable_update()
         self.optimizer.add_hook(chainer.optimizer_hooks.GradientClipping(1.0))
 
     def get_maxQ_action(self, state):
